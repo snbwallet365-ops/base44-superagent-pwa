@@ -2,15 +2,18 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowUp, AudioLines, BookOpen, ChevronDown, CircleHelp,
+  ArrowUp, AudioLines, BookOpen, ChevronDown, CircleHelp, KeyRound,
   FileText, FolderKanban, Menu, MessageSquare, Mic, PanelLeftClose,
-  PanelLeftOpen, Phone, Plus, Puzzle, Search, Settings, ShieldCheck, Sparkles,
+  PanelLeftOpen, Phone, PlugZap, Plus, Puzzle, Search, Settings, ShieldCheck, Sparkles,
   Target, Terminal, Video, Workflow, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import AutomationSkills from "@/components/AutomationSkills";
+import ConnectorSuite from "@/components/ConnectorSuite";
+import CredentialVault from "@/components/CredentialVault";
 import WhatsAppConnect from "@/components/WhatsAppConnect";
+import { emptyVault, type VaultData } from "@/lib/security/vault";
 import { supabase, supabaseReady } from "@/lib/supabase/browser";
 
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string; created_at?: string };
@@ -24,6 +27,19 @@ type SpeechWindow = Window & {
   SpeechRecognition?: new () => { lang: string; onresult: ((e: { results: ArrayLike<ArrayLike<SpeechResult>> }) => void) | null; onend: (() => void) | null; start: () => void };
   webkitSpeechRecognition?: new () => { lang: string; onresult: ((e: { results: ArrayLike<ArrayLike<SpeechResult>> }) => void) | null; onend: (() => void) | null; start: () => void };
 };
+
+function MessageContent({ content }: { content: string }) {
+  const blocks = content.split(/```([\s\S]*?)```/g);
+  return <>{blocks.map((block, index) => {
+    if (index % 2) {
+      const splitAt = block.indexOf("\n");
+      const language = splitAt > 0 ? block.slice(0, splitAt).trim() : "code";
+      const code = splitAt > 0 ? block.slice(splitAt + 1) : block;
+      return <pre className="message-code" key={index}><span>{language}<button onClick={() => void navigator.clipboard?.writeText(code)}>Copy</button></span><code>{code}</code></pre>;
+    }
+    return block.split(/\n\n+/).filter(Boolean).map((paragraph, paragraphIndex) => <p key={`${index}-${paragraphIndex}`}>{paragraph.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, partIndex) => part.startsWith("`") && part.endsWith("`") ? <code key={partIndex}>{part.slice(1, -1)}</code> : part.startsWith("**") && part.endsWith("**") ? <strong key={partIndex}>{part.slice(2, -2)}</strong> : part)}</p>);
+  })}</>;
+}
 
 const navItems = [
   { label: "Apps", icon: FolderKanban },
@@ -60,6 +76,10 @@ export default function Home() {
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
+  const [vaultOpen, setVaultOpen] = useState(false);
+  const [mode, setMode] = useState<"agent" | "chat">("agent");
+  const [vaultData, setVaultData] = useState<VaultData>(emptyVault);
   const [email, setEmail] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -131,7 +151,7 @@ export default function Home() {
       if (!auth.session || stopped) return;
       try {
         const response = await fetch(`/api/agent?sessionId=${encodeURIComponent(activeSession)}`, {
-          headers: { Authorization: `Bearer ${auth.session.access_token}` }, cache: "no-store",
+          headers: { Authorization: `Bearer ${auth.session.access_token}`, "X-Browser-Use-Keys": btoa(JSON.stringify(vaultData.browserUseKeys)) }, cache: "no-store",
         });
         const data = await response.json();
         if (stopped) return;
@@ -193,6 +213,40 @@ export default function Home() {
       const activeConversation = conversation ?? (currentId ? { id: currentId, title: "New Conversation", created_at: new Date().toISOString() } : null);
       if (!activeConversation) throw new Error("Could not start a conversation.");
       const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: combined, created_at: new Date().toISOString() };
+      if (mode === "chat") {
+        const localMessages = [...(localStore.messages[activeConversation.id] ?? []), userMessage];
+        if (supabase && profile) await supabase.from("messages").insert({ conversation_id: activeConversation.id, owner_id: profile.id, role: "user", content: combined, meta: { mode: "chat" } });
+        else saveLocal(conversations, { ...localStore.messages, [activeConversation.id]: localMessages });
+        addMessage(userMessage);
+        const assistantId = crypto.randomUUID();
+        setMessages((previous) => [...previous, { id: assistantId, role: "assistant", content: "" }]);
+        const selected: { provider: string; keys: string[] } | null = vaultData.openaiKeys.length ? { provider: "openai", keys: vaultData.openaiKeys } : vaultData.anthropicKeys.length ? { provider: "anthropic", keys: vaultData.anthropicKeys } : vaultData.geminiKeys.length ? { provider: "gemini", keys: vaultData.geminiKeys } : vaultData.customKeys.length ? { provider: "custom", keys: vaultData.customKeys } : null;
+        let answer = "";
+        if (!selected) answer = "Pure Chat is ready. Open the credential vault and unlock a provider key to start a private streaming conversation.";
+        else {
+          const models: Record<string, string[]> = { openai: ["gpt-4o-mini", "gpt-4o", "o3-mini"], anthropic: ["claude-3-7-sonnet-latest", "claude-3-7-sonnet-latest", "claude-3-7-sonnet-latest"], gemini: ["gemini-2.0-flash", "gemini-2.0-flash", "gemini-2.5-pro"], custom: [vaultData.customModel, vaultData.customModel, vaultData.customModel] };
+          const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: selected.provider, keys: selected.keys, model: models[selected.provider][modelIndex], baseUrl: vaultData.customBaseUrl, messages: [...messages.filter((item) => item.content).map(({ role, content }) => ({ role, content })), { role: "user", content: combined }] }) });
+          if (!response.ok) { const result = await response.json(); throw new Error(result.error ?? "The model request failed."); }
+          const reader = response.body!.getReader(), decoder = new TextDecoder(); let buffer = "";
+          while (true) {
+            const { value, done } = await reader.read(); buffer += decoder.decode(value, { stream: !done });
+            const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() ?? "";
+            for (const item of events) {
+              const line = item.split(/\r?\n/).find((entry) => entry.startsWith("data: "))?.slice(6);
+              if (!line || line === "[DONE]") continue;
+              const chunk = JSON.parse(line) as { text?: string; error?: string };
+              if (chunk.error) throw new Error(chunk.error);
+              answer += chunk.text ?? "";
+              setMessages((previous) => previous.map((message) => message.id === assistantId ? { ...message, content: answer } : message));
+            }
+            if (done) break;
+          }
+        }
+        if (!selected) setMessages((previous) => previous.map((message) => message.id === assistantId ? { ...message, content: answer } : message));
+        if (supabase && profile) await supabase.from("messages").insert({ conversation_id: activeConversation.id, owner_id: profile.id, role: "assistant", content: answer, meta: { mode: "chat" } });
+        else saveLocal(conversations, { ...localStore.messages, [activeConversation.id]: [...localMessages, { id: assistantId, role: "assistant", content: answer }] });
+        return;
+      }
       if (supabase && profile) {
         const uploaded: AgentAttachment[] = [];
         for (const file of selectedFiles) {
@@ -216,6 +270,10 @@ export default function Home() {
             conversationId: activeConversation.id,
             model: [undefined, "claude-sonnet-4.6", "claude-opus-4.7"][modelIndex],
             attachments: uploaded,
+            browserUseKeys: vaultData.browserUseKeys,
+            base44Keys: vaultData.base44Keys,
+            base44AgentId: vaultData.base44AgentId,
+            base44AgentUrl: vaultData.base44AgentUrl,
           }),
         });
         const result = await response.json();
@@ -304,7 +362,7 @@ export default function Home() {
   const isFresh = messages.length === 0;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${busy ? "prompt-live" : ""}`}>
       <button aria-label="Close navigation" className={`overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
       <aside className={`sidebar ${collapsed ? "collapsed" : ""} ${sidebarOpen ? "mobile-open" : ""}`}>
         <div className="brand-row">
@@ -316,7 +374,7 @@ export default function Home() {
         <div className="sidebar-section">Workspace</div>
         <nav className="nav-stack" aria-label="Main navigation">
           {navItems.map(({ label, icon: Icon }) => (
-            <button key={label} className={`nav-item ${activeNav === label ? "active" : ""}`} onClick={() => { setActiveNav(label); setSidebarOpen(false); if (label === "Automation skills") setSkillsOpen(true); }}>
+            <button key={label} className={`nav-item ${activeNav === label ? "active" : ""}`} onClick={() => { setActiveNav(label); setSidebarOpen(false); if (label === "Automation skills") setSkillsOpen(true); if (label === "Plugins") setConnectorsOpen(true); }}>
               <Icon size={16} strokeWidth={1.8} /><span className="nav-label">{label}</span>
             </button>
           ))}
@@ -350,8 +408,11 @@ export default function Home() {
               <span className="workspace-name">{activeNav === "Agent" ? "Personal workspace" : activeNav}</span>
               <ChevronDown className="workspace-chevron" size={14} />
             </button>
+            <div className="mode-switch" role="group" aria-label="Workspace mode"><button className={mode === "agent" ? "selected" : ""} onClick={() => setMode("agent")}><Sparkles size={13} />Superagent</button><button className={mode === "chat" ? "selected" : ""} onClick={() => setMode("chat")}>Pure Chat</button></div>
           </div>
           <div className="topbar-right">
+            <button className="icon-button" aria-label="Connectors" title="Connector suite" onClick={() => setConnectorsOpen(true)}><PlugZap size={17} /></button>
+            <button className="icon-button" aria-label="Credential vault" title="Credential vault" onClick={() => setVaultOpen(true)}><KeyRound size={17} /></button>
             <button className="icon-button" aria-label="Help" onClick={() => setSettingsOpen(true)}><CircleHelp size={17} /></button>
             <button className="upgrade-button" onClick={() => setSettingsOpen(true)}><Sparkles size={13} /><span>Upgrade</span></button>
           </div>
@@ -375,7 +436,7 @@ export default function Home() {
                 {messages.map((message) => (
                   <div key={message.id} className={`message-row ${message.role}`}>
                     {message.role === "assistant" && <span className="message-avatar"><PixelMark size={18} /></span>}
-                    <div className="message-bubble">{message.content}</div>
+           <div className="message-bubble"><MessageContent content={message.content} /></div>
                   </div>
                 ))}
                 {activeSession && <div className="execution-pill thread-status"><i />Agent is running your task</div>}
@@ -386,7 +447,7 @@ export default function Home() {
           </AnimatePresence>
 
           <div className="composer-wrap">
-            <form className="composer" onSubmit={(event) => void sendMessage(event)}>
+            <form className={`composer ${busy ? "streaming" : ""}`} onSubmit={(event) => void sendMessage(event)}>
               {attachments.map((file) => <span className="attachment-pill" key={`${file.name}-${file.size}`}><FileText size={12} />{file.name}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => setAttachments((items) => items.filter((item) => item !== file))}><X size={11} /></button></span>)}
               <textarea
                 ref={textarea}
@@ -456,6 +517,8 @@ export default function Home() {
         }}
         onClose={() => setSkillsOpen(false)}
       />
+      <CredentialVault open={vaultOpen} onClose={() => setVaultOpen(false)} onUnlock={setVaultData} />
+      <ConnectorSuite open={connectorsOpen} onClose={() => setConnectorsOpen(false)} vault={vaultData} />
       <span className="sr-only" aria-live="polite">{voiceActive ? "Listening" : ""}</span>
     </div>
   );

@@ -1,9 +1,10 @@
-const CACHE = "elowen-shell-v1";
+const CACHE = "elowen-shell-v2";
+const SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-512.png"];
 self.addEventListener("install", (event) => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).catch(() => undefined).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key.startsWith("elowen-shell-") && key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", (event) => {
   const request = event.request;
