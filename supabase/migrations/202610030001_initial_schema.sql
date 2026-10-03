@@ -28,13 +28,26 @@ create table if not exists public.agent_goals (
   owner_id uuid not null default auth.uid() references auth.users(id) on delete cascade
 );
 
+create table if not exists public.execution_traces (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  agent_goal_id uuid references public.agent_goals(id) on delete set null,
+  owner_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  provider text not null check (provider in ('browser_use', 'base44', 'playwright', 'evaluator', 'offline')),
+  event text not null,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists conversations_owner_created_idx on public.conversations(owner_id, created_at desc);
 create index if not exists messages_conversation_created_idx on public.messages(conversation_id, created_at);
 create index if not exists goals_owner_session_idx on public.agent_goals(owner_id, browser_session_id);
+create index if not exists traces_conversation_created_idx on public.execution_traces(conversation_id, created_at desc);
 
 alter table public.conversations enable row level security;
 alter table public.messages enable row level security;
 alter table public.agent_goals enable row level security;
+alter table public.execution_traces enable row level security;
 
 create policy "Users manage their conversations"
   on public.conversations for all to authenticated
@@ -59,7 +72,14 @@ create policy "Users manage their goals"
     select 1 from public.conversations c where c.id = conversation_id and c.owner_id = (select auth.uid())
   ));
 
+create policy "Users read their execution traces"
+  on public.execution_traces for select to authenticated
+  using (owner_id = (select auth.uid()) and exists (
+    select 1 from public.conversations c where c.id = conversation_id and c.owner_id = (select auth.uid())
+  ));
+
 grant select, insert, update, delete on public.conversations, public.messages, public.agent_goals to authenticated;
+grant select on public.execution_traces to authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('agent-attachments', 'agent-attachments', false, 10485760)
@@ -86,5 +106,11 @@ end $$;
 do $$
 begin
   alter publication supabase_realtime add table public.messages;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table public.execution_traces;
 exception when duplicate_object then null;
 end $$;

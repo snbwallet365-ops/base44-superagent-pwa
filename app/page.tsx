@@ -4,11 +4,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp, AudioLines, BookOpen, ChevronDown, CircleHelp,
   FileText, FolderKanban, Menu, MessageSquare, Mic, PanelLeftClose,
-  Phone, Plus, Puzzle, Search, Settings, ShieldCheck, Sparkles,
-  Target, Video, Workflow, X,
+  PanelLeftOpen, Phone, Plus, Puzzle, Search, Settings, ShieldCheck, Sparkles,
+  Target, Terminal, Video, Workflow, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
+import AutomationSkills from "@/components/AutomationSkills";
+import WhatsAppConnect from "@/components/WhatsAppConnect";
 import { supabase, supabaseReady } from "@/lib/supabase/browser";
 
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string; created_at?: string };
@@ -16,7 +18,7 @@ type Conversation = { id: string; title: string; created_at: string };
 type Profile = { id: string; email?: string };
 type AgentAttachment = { name: string; url: string };
 type LocalStore = { conversations: Conversation[]; messages: Record<string, ChatMessage[]> };
-type RuntimeStatus = { supabase: boolean; browserUse: boolean; base44: boolean };
+type RuntimeStatus = { supabase: boolean; browserUse: boolean; base44: boolean; playwright: boolean; evaluator: boolean; whatsapp: boolean };
 type SpeechResult = { transcript: string };
 type SpeechWindow = Window & {
   SpeechRecognition?: new () => { lang: string; onresult: ((e: { results: ArrayLike<ArrayLike<SpeechResult>> }) => void) | null; onend: (() => void) | null; start: () => void };
@@ -28,6 +30,7 @@ const navItems = [
   { label: "Agent", icon: Sparkles },
   { label: "Workflows", icon: Workflow },
   { label: "Plugins", icon: Puzzle },
+  { label: "Automation skills", icon: Terminal },
   { label: "Meetings", icon: Video },
   { label: "Notes", icon: BookOpen },
 ];
@@ -44,7 +47,7 @@ function PixelMark({ size = 28 }: { size?: number }) {
 
 export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>({ supabase: false, browserUse: false, base44: false });
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>({ supabase: false, browserUse: false, base44: false, playwright: false, evaluator: false, whatsapp: false });
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -56,6 +59,7 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -312,7 +316,7 @@ export default function Home() {
         <div className="sidebar-section">Workspace</div>
         <nav className="nav-stack" aria-label="Main navigation">
           {navItems.map(({ label, icon: Icon }) => (
-            <button key={label} className={`nav-item ${activeNav === label ? "active" : ""}`} onClick={() => { setActiveNav(label); setSidebarOpen(false); }}>
+            <button key={label} className={`nav-item ${activeNav === label ? "active" : ""}`} onClick={() => { setActiveNav(label); setSidebarOpen(false); if (label === "Automation skills") setSkillsOpen(true); }}>
               <Icon size={16} strokeWidth={1.8} /><span className="nav-label">{label}</span>
             </button>
           ))}
@@ -363,6 +367,7 @@ export default function Home() {
                 <div className="quick-actions">
                   <button className="quick-action" onClick={() => { setDraft("Let your agent call someone for me about "); textarea.current?.focus(); }}><Phone size={14} />Let your agent call other people for you</button>
                   <button className="quick-action" onClick={() => { setDraft("/goal "); textarea.current?.focus(); }}><Target size={14} />Use /goal for longer and complex tasks</button>
+                  <WhatsAppConnect />
                 </div>
               </motion.div>
             ) : (
@@ -373,6 +378,7 @@ export default function Home() {
                     <div className="message-bubble">{message.content}</div>
                   </div>
                 ))}
+                {activeSession && <div className="execution-pill thread-status"><i />Agent is running your task</div>}
                 {busy && <div className="message-row assistant"><span className="message-avatar"><PixelMark size={18} /></span><span className="message-pending"><i /><i /><i /></span></div>}
                 <div aria-hidden="true" style={{ float: "left", clear: "both" }} ref={(element) => element?.scrollIntoView({ behavior: "smooth", block: "end" })} />
               </div>
@@ -404,7 +410,7 @@ export default function Home() {
                 <button type="button" className="toolbar-button model-select" aria-label="Change model" title="Choose response depth" onClick={() => setModelIndex((index) => (index + 1) % modelNames.length)}>{modelNames[modelIndex]}<ChevronDown size={12} /></button>
                 <span className="toolbar-spacer" />
                 <button type="button" className="toolbar-button" aria-label="Voice typing" title="Dictate a message" onClick={startDictation}><Mic size={16} /></button>
-                <button type="button" className="toolbar-button" aria-label="Voice input" title={voiceActive ? "Listening" : "Start voice input"} onClick={startDictation} style={{ color: voiceActive ? "#4f46e5" : undefined }}><AudioLines size={17} /></button>
+                <button type="button" className={`toolbar-button waveform-button ${voiceActive ? "active" : ""}`} aria-label="Voice input" title={voiceActive ? "Listening" : "Start voice input"} onClick={startDictation}><AudioLines size={17} /></button>
                 <button type="submit" className="send-button" disabled={busy || (!draft.trim() && !attachments.length)} aria-label="Send message"><ArrowUp size={17} /></button>
               </div>
             </form>
@@ -425,7 +431,7 @@ export default function Home() {
               {profile ? (
                 <div className="modal-form">
                   <div className="modal-message" style={{ display: "flex", alignItems: "center", gap: 8 }}><ShieldCheck size={15} color="#4f46e5" />Signed in as {profile.email}. Your conversations sync to Supabase.</div>
-                  <div className="modal-message">Supabase {runtimeStatus.supabase ? "connected" : "not configured"} · Browser Use {runtimeStatus.browserUse ? "connected" : "not configured"} · Base44 {runtimeStatus.base44 ? "connected" : "optional"}</div>
+                  <div className="modal-message">Supabase {runtimeStatus.supabase ? "connected" : "not configured"} · Browser Use {runtimeStatus.browserUse ? "connected" : "not configured"} · WhatsApp {runtimeStatus.whatsapp ? "ready" : "not configured"} · Playwright {runtimeStatus.playwright ? "ready" : "optional"} · Evaluator {runtimeStatus.evaluator ? "ready" : "local checks"}</div>
                   <button className="modal-primary" type="button" onClick={() => void signOut()}>Sign out</button>
                 </div>
               ) : (
@@ -440,6 +446,16 @@ export default function Home() {
           </motion.div>
         )}
       </AnimatePresence>
+      <AutomationSkills
+        open={skillsOpen}
+        enabled={runtimeStatus.playwright}
+        conversationId={currentId}
+        onConversationCreated={(id) => {
+          setCurrentId(id);
+          setConversations((items) => items.some((item) => item.id === id) ? items : [{ id, title: "Automation skill session", created_at: new Date().toISOString() }, ...items]);
+        }}
+        onClose={() => setSkillsOpen(false)}
+      />
       <span className="sr-only" aria-live="polite">{voiceActive ? "Listening" : ""}</span>
     </div>
   );

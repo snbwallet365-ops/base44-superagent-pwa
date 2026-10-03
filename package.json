@@ -10,11 +10,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@base44/sdk": "^0.8.52",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.57.0",
     "framer-motion": "^12.23.12",
     "lucide-react": "^0.468.0",
     "next": "15.5.3",
+    "qrcode.react": "^4.2.0",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   },

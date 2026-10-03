@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { evaluateAndRefine } from "@/lib/agent/evaluator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,6 +97,23 @@ export async function POST(request: Request) {
     .maybeSingle();
   if (conversationError || !conversation) return fail("Conversation not found.", 404);
 
+  const { data: goal, error: goalCreateError } = await admin.from("agent_goals").insert({
+    conversation_id: input.conversationId,
+    owner_id: identity.user.id,
+    goal_title: message.slice(0, 200),
+    status: "planning",
+    steps: [],
+  }).select("id").single();
+  if (goalCreateError || !goal) return fail("Could not save this task to Supabase.", 500);
+  await admin.from("execution_traces").insert({
+    conversation_id: input.conversationId,
+    agent_goal_id: goal.id,
+    owner_id: identity.user.id,
+    provider: "offline",
+    event: "task_received",
+    details: { message_length: message.length, attachment_count: attachmentList.length },
+  });
+
   const task = async () => {
     if (process.env.BASE44_AGENT_URL) {
       if (!process.env.BASE44_API_KEY || !process.env.BASE44_AGENT_ID) {
@@ -117,11 +135,11 @@ export async function POST(request: Request) {
       });
       const payload = await readPayload(response);
       if (!response.ok) throw new Error(String(payload.error ?? `Base44 endpoint returned ${response.status}.`));
-      return { mode: "base44", payload, answer: messageOf(payload) };
+      return { mode: "base44", payload, answer: messageOf(payload) || "Your Base44 agent accepted the task. Check its connected conversation for the result." };
     }
 
     if (!process.env.BROWSER_USE_API_KEY) {
-      throw new Error("Connect Browser Use Cloud or configure a Base44 agent endpoint in the server environment.");
+      return { mode: "offline", payload: {}, answer: "I saved this task. Add a Browser Use API key or Base44 agent endpoint to enable live execution; your conversation and task remain synced here." };
     }
     const baseUrl = (process.env.BROWSER_USE_BASE_URL ?? "https://api.browser-use.com/api/v3").replace(/\/$/, "");
     const costLimit = Number(process.env.BROWSER_USE_MAX_COST_USD ?? "2");
@@ -139,20 +157,32 @@ export async function POST(request: Request) {
 
     const sessionId = sessionIdOf(payload);
     if (!sessionId) throw new Error("Browser Use created a response without a session ID.");
-    const { error: goalError } = await admin.from("agent_goals").insert({
-      conversation_id: input.conversationId,
-      owner_id: identity.user.id,
-      goal_title: message.slice(0, 200),
-      status: "in_progress",
-      browser_session_id: sessionId,
-      steps: [],
-    });
+    const { error: goalError } = await admin.from("agent_goals").update({ status: "in_progress", browser_session_id: sessionId }).eq("id", goal.id);
     if (goalError) throw new Error("The agent started, but its progress could not be saved. Check the Supabase migration.");
+    await admin.from("execution_traces").insert({
+      conversation_id: input.conversationId,
+      agent_goal_id: goal.id,
+      owner_id: identity.user.id,
+      provider: "browser_use",
+      event: "session_started",
+      details: { session_id: sessionId, model: input.model ?? "auto" },
+    });
     return { mode: "browser_use", sessionId, payload, answer: messageOf(payload) };
   };
 
   try {
     const result = await task();
+    if (result.mode !== "browser_use") {
+      await admin.from("agent_goals").update({ status: "completed" }).eq("id", goal.id);
+      await admin.from("execution_traces").insert({
+        conversation_id: input.conversationId,
+        agent_goal_id: goal.id,
+        owner_id: identity.user.id,
+        provider: result.mode === "base44" ? "base44" : "offline",
+        event: result.mode === "base44" ? "task_completed" : "offline_fallback",
+        details: { answer_length: result.answer.length },
+      });
+    }
     if (result.answer) {
       await admin.from("messages").insert({
         conversation_id: input.conversationId,
@@ -164,6 +194,15 @@ export async function POST(request: Request) {
     }
     return NextResponse.json(result, { status: result.mode === "browser_use" ? 202 : 200 });
   } catch (error) {
+    await admin.from("agent_goals").update({ status: "failed" }).eq("id", goal.id);
+    await admin.from("execution_traces").insert({
+      conversation_id: input.conversationId,
+      agent_goal_id: goal.id,
+      owner_id: identity.user.id,
+      provider: process.env.BASE44_AGENT_URL ? "base44" : process.env.BROWSER_USE_API_KEY ? "browser_use" : "offline",
+      event: "task_failed",
+      details: { error: error instanceof Error ? error.message.slice(0, 500) : "Unknown agent error" },
+    });
     return fail(error instanceof Error ? error.message : "The agent request failed.", 502);
   }
 }
@@ -175,51 +214,76 @@ export async function GET(request: Request) {
 
   const sessionId = new URL(request.url).searchParams.get("sessionId");
   if (!sessionId) return fail("A session ID is required.");
-  const { data: goal } = await admin
+  const { data: goal, error: goalError } = await admin
     .from("agent_goals")
-    .select("id, conversation_id, status")
+    .select("id, conversation_id, goal_title, status")
     .eq("browser_session_id", sessionId)
     .eq("owner_id", identity.user.id)
     .maybeSingle();
-  if (!goal) return fail("Agent session not found.", 404);
+  if (goalError || !goal) return fail("Agent session not found.", 404);
+  if (goal.status === "completed" || goal.status === "failed") {
+    const { data: messages } = await admin.from("messages").select("content").eq("conversation_id", goal.conversation_id).contains("meta", { session_id: sessionId }).limit(1);
+    return NextResponse.json({ status: goal.status, answer: messages?.[0]?.content ?? "" });
+  }
+  if (goal.status !== "in_progress") return NextResponse.json({ status: "in_progress" });
 
   if (!process.env.BROWSER_USE_API_KEY) {
     return NextResponse.json({ status: goal.status, error: "Browser Use Cloud is not configured." });
   }
+  const { data: claimed } = await admin.from("agent_goals").update({ status: "planning" }).eq("id", goal.id).eq("status", "in_progress").select("id").maybeSingle();
+  if (!claimed) return NextResponse.json({ status: "in_progress" });
+
   const baseUrl = (process.env.BROWSER_USE_BASE_URL ?? "https://api.browser-use.com/api/v3").replace(/\/$/, "");
-  const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}`, {
-    headers: { "X-Browser-Use-API-Key": process.env.BROWSER_USE_API_KEY },
-    cache: "no-store",
-    signal: AbortSignal.timeout(20_000),
-  });
-  const payload = await readPayload(response);
-  if (!response.ok) return fail(String(payload.detail ?? `Browser Use returned ${response.status}.`), 502);
-
-  const rawStatus = String(payload.status ?? "").toLowerCase();
-  const answer = messageOf(payload);
-  const taskSucceeded = payload.isTaskSuccessful;
-  const completed = taskSucceeded === true || ["completed", "finished", "success", "succeeded"].includes(rawStatus);
-  const failed = taskSucceeded === false || ["failed", "error", "cancelled", "canceled", "timed_out"].includes(rawStatus) || rawStatus === "stopped";
-  const status = completed ? "completed" : failed ? "failed" : "in_progress";
-  await admin.from("agent_goals").update({ status, ...(payload.steps ? { steps: payload.steps } : {}) }).eq("id", goal.id);
-
-  if (answer) {
-    const { data: existing } = await admin
-      .from("messages")
-      .select("id")
-      .eq("conversation_id", goal.conversation_id)
-      .eq("owner_id", identity.user.id)
-      .contains("meta", { session_id: sessionId })
-      .limit(1);
-    if (!existing?.length) {
-      await admin.from("messages").insert({
-        conversation_id: goal.conversation_id,
-        owner_id: identity.user.id,
-        role: "assistant",
-        content: answer,
-        meta: { provider: "browser_use", session_id: sessionId },
-      });
+  try {
+    const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}`, {
+      headers: { "X-Browser-Use-API-Key": process.env.BROWSER_USE_API_KEY },
+      cache: "no-store",
+      signal: AbortSignal.timeout(20_000),
+    });
+    const payload = await readPayload(response);
+    if (!response.ok) {
+      await admin.from("agent_goals").update({ status: "in_progress" }).eq("id", goal.id);
+      return fail(String(payload.detail ?? `Browser Use returned ${response.status}.`), 502);
     }
+
+    const rawStatus = String(payload.status ?? "").toLowerCase();
+    const taskSucceeded = payload.isTaskSuccessful;
+    const completed = taskSucceeded === true || ["completed", "finished", "success", "succeeded"].includes(rawStatus);
+    const failed = taskSucceeded === false || ["failed", "error", "cancelled", "canceled", "timed_out"].includes(rawStatus) || rawStatus === "stopped";
+    if (!completed && !failed) {
+      await admin.from("agent_goals").update({ status: "in_progress", ...(payload.steps ? { steps: payload.steps } : {}) }).eq("id", goal.id);
+      return NextResponse.json({ status: "in_progress", progress: payload.lastStepSummary ?? null });
+    }
+
+    const evaluation = await evaluateAndRefine({ task: goal.goal_title, draft: messageOf(payload), succeeded: completed && !failed });
+    const finalStatus = evaluation.passed ? "completed" : "failed";
+    await admin.from("agent_goals").update({ status: finalStatus, ...(payload.steps ? { steps: payload.steps } : {}) }).eq("id", goal.id);
+    await admin.from("execution_traces").insert({
+      conversation_id: goal.conversation_id,
+      agent_goal_id: goal.id,
+      owner_id: identity.user.id,
+      provider: "browser_use",
+      event: "task_finished",
+      details: { session_id: sessionId, result_status: rawStatus, successful: evaluation.passed, result_length: evaluation.answer.length },
+    });
+    await admin.from("execution_traces").insert({
+      conversation_id: goal.conversation_id,
+      agent_goal_id: goal.id,
+      owner_id: identity.user.id,
+      provider: "evaluator",
+      event: evaluation.passed ? "answer_approved" : "answer_rejected",
+      details: { source: evaluation.source, critique: evaluation.critique },
+    });
+    await admin.from("messages").insert({
+      conversation_id: goal.conversation_id,
+      owner_id: identity.user.id,
+      role: "assistant",
+      content: evaluation.answer,
+      meta: { provider: "browser_use", session_id: sessionId, evaluation: { passed: evaluation.passed, source: evaluation.source } },
+    });
+    return NextResponse.json({ status: finalStatus, answer: evaluation.answer, evaluation: { passed: evaluation.passed, critique: evaluation.critique } });
+  } catch (error) {
+    await admin.from("agent_goals").update({ status: "in_progress" }).eq("id", goal.id);
+    return fail(error instanceof Error ? error.message : "Could not retrieve the agent result.", 502);
   }
-  return NextResponse.json({ status, answer, payload });
 }

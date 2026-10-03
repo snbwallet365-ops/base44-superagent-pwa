@@ -184,3 +184,80 @@ button { color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.brand-mark { background: linear-gradient(145deg, #6258ef, #4338ca); }
+.hero-mark { background: linear-gradient(145deg, #fff 8%, #f4f2ff 100%); }
+.whatsapp-chip { border-color: #ccebd9; color: #176b43; background: #f4fbf6; }
+.whatsapp-chip svg { color: #159653; }
+.whatsapp-chip:hover { border-color: #9ed7b6; background: #eaf8ef; }
+.waveform-button.active { color: #4f46e5; background: #f0efff; }
+.waveform-button.active svg { animation: waveform 650ms ease-in-out infinite alternate; }
+@keyframes waveform { to { transform: scaleY(.62); } }
+.execution-pill { display: inline-flex; align-items: center; gap: 7px; width: fit-content; padding: 6px 10px; border: 1px solid #d9f0e1; border-radius: 999px; color: #27734a; background: #f3fbf5; font-size: 10px; font-weight: 580; }
+.execution-pill i { width: 7px; height: 7px; background: #29a764; border-radius: 50%; box-shadow: 0 0 0 3px #29a76420; animation: status-pulse 1.35s infinite; }
+.execution-pill.passed { color: #27734a; }.execution-pill.failed { color: #b42318; border-color: #f5d2cf; background: #fff7f6; }
+.execution-pill.failed i { background: #dc4b42; box-shadow: 0 0 0 3px #dc4b4220; }
+.thread-status { margin: 7px 0 5px 36px; }
+@keyframes status-pulse { 50% { box-shadow: 0 0 0 5px #29a76410; } }
+.whatsapp-backdrop { z-index: 55; }
+.whatsapp-modal { position: relative; width: min(100%, 470px); padding: 30px; border: 1px solid #e8e8ed; border-radius: 23px; background: #fff; box-shadow: 0 26px 90px #16162626; text-align: center; }
+.whatsapp-close { position: absolute; top: 14px; right: 14px; }
+.whatsapp-emblem { width: 46px; height: 46px; display: grid; place-items: center; margin: 0 auto 16px; border-radius: 15px; color: #138b4e; background: #eaf8ef; }
+.eyebrow { margin: 0 0 8px; color: #73737d; font-size: 10px; text-transform: uppercase; letter-spacing: .11em; font-weight: 650; }
+.whatsapp-modal h2 { margin: 0; font-size: 24px; letter-spacing: -.045em; }
+.whatsapp-copy { max-width: 330px; margin: 10px auto 20px; color: #777781; font-size: 12px; line-height: 1.55; }
+.whatsapp-connect-body { display: grid; justify-items: center; gap: 15px; }
+.whatsapp-qr { display: grid; place-items: center; padding: 10px; border: 1px solid #e9e9ee; border-radius: 13px; background: white; }
+.whatsapp-steps { display: grid; grid-template-columns: 1fr; gap: 8px; width: min(100%, 285px); text-align: left; }
+.whatsapp-steps span { display: flex; align-items: center; gap: 9px; color: #4f4f59; font-size: 11px; }
+.whatsapp-steps i { width: 19px; height: 19px; display: grid; place-items: center; border: 1px solid #e4e4e9; border-radius: 50%; color: #6b62db; font-size: 9px; font-style: normal; }
+.whatsapp-primary { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 43px; border-radius: 10px; color: white; background: #138b4e; font-size: 12px; font-weight: 620; text-decoration: none; transition: background .15s, transform .15s; }
+.whatsapp-primary:hover { background: #0d7440; transform: translateY(-1px); }
+.whatsapp-trust { display: flex; align-items: center; gap: 6px; color: #8c8c95; font-size: 9px; }
+.whatsapp-trust svg { color: #38845c; }
+.whatsapp-mobile-note { display: none; margin-top: 12px; color: #a1a1aa; font-size: 10px; }
+.whatsapp-error { padding: 12px; border: 1px solid #f4d0cc; border-radius: 10px; color: #982b23; background: #fff7f6; font-size: 11px; line-height: 1.55; text-align: left; }
+
+.skills-backdrop { z-index: 52; place-items: stretch end; padding: 0; }
+.skills-drawer { width: min(100%, 550px); height: 100dvh; padding: 23px 22px max(20px, env(safe-area-inset-bottom)); overflow: auto; border: 1px solid #e7e7ed; border-radius: 22px 0 0 22px; background: #fff; box-shadow: -18px 0 55px #1010241a; }
+.skills-header { display: flex; align-items: center; gap: 11px; padding-bottom: 16px; border-bottom: 1px solid #efeff2; }
+.skills-title-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: #4f46e5; background: #f1f0ff; }
+.skills-header h2 { margin: 0; font-size: 16px; letter-spacing: -.03em; }
+.skills-header p { margin: 4px 0 0; color: #8a8a93; font-size: 10px; }
+.skills-header .modal-close { margin-left: auto; }
+.skills-status-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 15px 0 12px; }
+.skills-session { color: #9999a2; font-family: ui-monospace, monospace; font-size: 9px; }
+.skills-notice { display: flex; align-items: flex-start; gap: 8px; padding: 10px 11px; margin-bottom: 13px; border: 1px solid #f3dfb7; border-radius: 9px; color: #875a0b; background: #fffaf0; font-size: 10px; line-height: 1.5; }
+.skills-notice svg { flex: 0 0 auto; margin-top: 1px; }.skills-notice code { font-size: 9px; }
+.skills-fields { display: grid; gap: 9px; margin: 12px 0 14px; }
+.skills-fields label { display: grid; gap: 5px; color: #686871; font-size: 10px; font-weight: 600; }
+.skills-fields input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid #e4e4e9; border-radius: 8px; outline: 0; color: #29292f; background: #fff; font-size: 11px; }
+.skills-fields input:focus { border-color: #9a95ed; box-shadow: 0 0 0 3px #4f46e511; }
+.skills-fields-pair { display: grid; grid-template-columns: minmax(70px,.55fr) minmax(0,1fr); gap: 9px; }
+.skills-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px; }
+.skill-action { min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid #e7e7ed; border-radius: 9px; color: #55555e; background: #fff; text-align: left; font-size: 10px; cursor: pointer; transition: background .15s,border-color .15s; }
+.skill-action svg { flex: 0 0 auto; color: #7370ca; }
+.skill-action:hover:not(:disabled) { border-color: #d0cffa; background: #fafaff; }
+.skill-action:disabled { opacity: .5; cursor: not-allowed; }
+.skill-action.running { color: #4139b9; border-color: #cac7f4; background: #f6f5ff; }
+.skill-spinner { width: 11px; height: 11px; margin-left: auto; border: 1.5px solid #d7d4f6; border-top-color: #4f46e5; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.skills-output-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 17px 0 7px; color: #3f3f46; font-size: 10px; }
+.skills-output-head span { display: inline-flex; align-items: center; gap: 4px; color: #4b8a66; font-size: 9px; }
+.skills-output { min-height: 110px; max-height: 230px; margin: 0; padding: 12px; overflow: auto; border: 1px solid #e8e8ed; border-radius: 10px; color: #565660; background: #fafafc; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; line-height: 1.55; }
+.skills-error { padding: 11px; border: 1px solid #f1d0cc; border-radius: 9px; color: #982b23; background: #fff7f6; font-size: 10px; line-height: 1.5; }
+.skills-footnote { display: flex; align-items: center; gap: 4px; margin: 10px 0 0; color: #9999a2; font-size: 9px; }
+
+@media (max-width: 760px) {
+  .skills-backdrop { place-items: end center; }
+  .skills-drawer { width: 100%; height: min(88dvh, 760px); padding: 20px 16px max(16px, env(safe-area-inset-bottom)); border-radius: 20px 20px 0 0; }
+  .whatsapp-modal { width: 100%; padding: 25px 20px max(22px, env(safe-area-inset-bottom)); border-radius: 22px 22px 0 0; }
+  .whatsapp-backdrop { place-items: end center; padding: 0; }
+  .whatsapp-qr { display: none; }
+  .whatsapp-mobile-note { display: block; }
+}
+@media (max-width: 370px) {
+  .skills-grid { grid-template-columns: 1fr; }
+  .skills-fields-pair { grid-template-columns: 72px minmax(0,1fr); }
+  .quick-action.whatsapp-chip { font-size: 9.5px; }
+}
