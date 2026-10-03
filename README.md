@@ -1,2 +1,32 @@
-# base44-superagent-pwa
-Mobile-first Elowen-style Superagent PWA with Supabase and Browser Use Cloud integrations
+# Elowen · Superagent PWA
+
+A mobile-first Next.js 15 workspace inspired by Base44 Superagent. It includes an installable PWA shell, Supabase Auth and private conversation storage, realtime message updates, and server-side Browser Use Cloud v3 task dispatch.
+
+## Run locally
+
+1. Install Node.js 20.9 or newer.
+2. Copy `.env.example` to `.env.local` and fill in the values for the services you use.
+3. Install packages with `npm install`.
+4. Apply `supabase/migrations/202610030001_initial_schema.sql` in the Supabase SQL editor.
+5. In Supabase Auth, enable email OTP and add `http://localhost:3000/auth/callback` to the allowed redirect URLs.
+6. Start the app with `npm run dev` and visit `http://localhost:3000`.
+
+The interface works in device-local mode without credentials. Cloud sync and live agent execution require Supabase Auth, the migration, and the server-side environment values. The Supabase service-role key and Browser Use API key must never use a `NEXT_PUBLIC_` prefix.
+
+## Integrations
+
+- **Supabase:** magic-link sign-in, private Postgres data protected by row-level security, Realtime message inserts, and private file storage. Attachments are limited to five files of at most 10 MB each and are shared with the configured agent through expiring signed links. The migration adds `owner_id` to the requested records so each account's conversations remain private.
+- **Browser Use Cloud:** when `BROWSER_USE_API_KEY` is set, tasks are dispatched from `/api/agent` to `POST https://api.browser-use.com/api/v3/sessions` using `X-Browser-Use-API-Key`. The returned session is polled server-side through the session endpoint. Each task has a configurable cost cap (`BROWSER_USE_MAX_COST_USD`, default $2, maximum $25). API keys are never sent to the browser.
+- **Base44:** set `BASE44_AGENT_URL`, `BASE44_AGENT_ID`, and `BASE44_API_KEY` to a trusted server-side webhook/adapter you control. Elowen posts `{ agent_id, message, conversation_id }` using a Bearer token. `BASE44_BASE_URL` is retained for deployments using the Base44 SDK, but the SDK's agent conversations require a Base44-authenticated user session; a project API key alone is not a documented generic agent invoke endpoint. When the Base44 adapter is configured, it takes precedence over Browser Use for task execution.
+
+## PWA
+
+The app serves its manifest at `/manifest.webmanifest`, a 512px PNG app icon plus SVG fallback, and registers a network-first service worker at `/sw.js`. The service worker intentionally does not cache API responses. On iPhone/iPad, open the page in Safari and use **Share → Add to Home Screen**. On Chrome, use the browser's **Install app** action.
+
+## Deploy
+
+Deploy this directory to a Node.js host that supports Next.js App Router (for example Vercel). Set the same environment values in the hosting dashboard and add the deployed `/auth/callback` URL to Supabase's allowed redirect URLs. Do not expose the service-role or integration keys in client code.
+
+## Repository setup
+
+The source is ready to initialize as a Git repository. Set the repository remote and push the `main` branch after choosing a GitHub repository and its visibility.
