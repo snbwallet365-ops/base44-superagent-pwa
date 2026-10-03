@@ -1,4 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { NextResponse } from "next/server";
 import { evaluateAndRefine } from "@/lib/agent/evaluator";
 
@@ -11,6 +13,10 @@ type AgentRequest = {
   sessionId?: string;
   model?: string;
   attachments?: { name?: string; url?: string }[];
+  browserUseKeys?: string[];
+  base44Keys?: string[];
+  base44AgentId?: string;
+  base44AgentUrl?: string;
 };
 
 function fail(message: string, status = 400) {
@@ -63,6 +69,28 @@ function messageOf(data: Record<string, unknown>) {
   return "";
 }
 
+function privateAddress(address: string) {
+  const normalized = address.replace(/^\[|\]$/g, "").toLowerCase();
+  if (isIP(normalized) === 4) {
+    const [a, b] = normalized.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (isIP(normalized) === 6) return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb") || normalized.startsWith("::ffff:127.") || normalized.startsWith("::ffff:10.") || normalized.startsWith("::ffff:192.168.");
+  return false;
+}
+
+async function trustedEndpoint(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.hostname === "localhost" || url.hostname.endsWith(".local") || url.hostname.endsWith(".internal") || privateAddress(url.hostname)) return false;
+    if (!isIP(url.hostname)) {
+      const addresses = await lookup(url.hostname, { all: true });
+      if (!addresses.length || addresses.some(({ address }) => privateAddress(address))) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
 export async function POST(request: Request) {
   const identity = await authorize(request);
   const admin = getAdminClient();
@@ -88,6 +116,11 @@ export async function POST(request: Request) {
   const taskMessage = attachmentList.length
     ? `${message}\n\nAttached files:\n${attachmentList.map((file) => `- ${file.name}: ${file.url}`).join("\n")}`
     : message;
+  const browserUseKeys = [...(Array.isArray(input.browserUseKeys) ? input.browserUseKeys : []), process.env.BROWSER_USE_API_KEY ?? ""].filter((key) => typeof key === "string" && key.trim()).slice(0, 10);
+  const base44Keys = [...(Array.isArray(input.base44Keys) ? input.base44Keys : []), process.env.BASE44_API_KEY ?? ""].filter((key) => typeof key === "string" && key.trim()).slice(0, 10);
+  const base44AgentUrl = input.base44AgentUrl?.trim() || process.env.BASE44_AGENT_URL || "";
+  const base44AgentId = input.base44AgentId?.trim() || process.env.BASE44_AGENT_ID || "";
+  if (base44AgentUrl && !(await trustedEndpoint(base44AgentUrl))) return fail("Base44 adapter URL must be public HTTPS. Private-network destinations are blocked.");
 
   const { data: conversation, error: conversationError } = await admin
     .from("conversations")
@@ -115,45 +148,44 @@ export async function POST(request: Request) {
   });
 
   const task = async () => {
-    if (process.env.BASE44_AGENT_URL) {
-      if (!process.env.BASE44_API_KEY || !process.env.BASE44_AGENT_ID) {
-        throw new Error("Set BASE44_API_KEY and BASE44_AGENT_ID alongside BASE44_AGENT_URL.");
+    if (base44AgentUrl) {
+      if (!base44Keys.length || !base44AgentId) throw new Error("Unlock a Base44 API key and configure the Base44 Agent ID.");
+      let response: Response | null = null;
+      let payload: Record<string, unknown> = {};
+      for (const key of base44Keys) {
+        response = await fetch(base44AgentUrl, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ agent_id: base44AgentId, message: taskMessage, conversation_id: input.conversationId, ...(input.model ? { model: input.model } : {}) }),
+          signal: AbortSignal.timeout(90_000),
+        });
+        payload = await readPayload(response);
+        if (response.ok) break;
+        if (![401, 403, 408, 429, 500, 502, 503, 504].includes(response.status)) throw new Error(String(payload.error ?? `Base44 endpoint returned ${response.status}.`));
       }
-      const response = await fetch(process.env.BASE44_AGENT_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.BASE44_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          agent_id: process.env.BASE44_AGENT_ID,
-          message: taskMessage,
-          conversation_id: input.conversationId,
-          ...(input.model ? { model: input.model } : {}),
-        }),
-        signal: AbortSignal.timeout(90_000),
-      });
-      const payload = await readPayload(response);
-      if (!response.ok) throw new Error(String(payload.error ?? `Base44 endpoint returned ${response.status}.`));
+      if (!response?.ok) throw new Error(String(payload.error ?? `Base44 endpoint returned ${response?.status ?? "an error"}.`));
       return { mode: "base44", payload, answer: messageOf(payload) || "Your Base44 agent accepted the task. Check its connected conversation for the result." };
     }
 
-    if (!process.env.BROWSER_USE_API_KEY) {
+    if (!browserUseKeys.length) {
       return { mode: "offline", payload: {}, answer: "I saved this task. Add a Browser Use API key or Base44 agent endpoint to enable live execution; your conversation and task remain synced here." };
     }
     const baseUrl = (process.env.BROWSER_USE_BASE_URL ?? "https://api.browser-use.com/api/v3").replace(/\/$/, "");
     const costLimit = Number(process.env.BROWSER_USE_MAX_COST_USD ?? "2");
-    const response = await fetch(`${baseUrl}/sessions`, {
-      method: "POST",
-      headers: {
-        "X-Browser-Use-API-Key": process.env.BROWSER_USE_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ task: taskMessage, keep_alive: true, max_cost_usd: Number.isFinite(costLimit) && costLimit > 0 ? Math.min(costLimit, 25) : 2, ...(input.model ? { model: input.model } : {}) }),
-      signal: AbortSignal.timeout(90_000),
-    });
-    const payload = await readPayload(response);
-    if (!response.ok) throw new Error(String(payload.detail ?? payload.error ?? `Browser Use returned ${response.status}.`));
+    let response: Response | null = null;
+    let payload: Record<string, unknown> = {};
+    for (const key of browserUseKeys) {
+      response = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { "X-Browser-Use-API-Key": key, "Content-Type": "application/json" },
+        body: JSON.stringify({ task: taskMessage, keep_alive: true, max_cost_usd: Number.isFinite(costLimit) && costLimit > 0 ? Math.min(costLimit, 25) : 2, ...(input.model ? { model: input.model } : {}) }),
+        signal: AbortSignal.timeout(90_000),
+      });
+      payload = await readPayload(response);
+      if (response.ok) break;
+      if (![401, 403, 408, 429, 500, 502, 503, 504].includes(response.status)) throw new Error(String(payload.detail ?? payload.error ?? `Browser Use returned ${response.status}.`));
+    }
+    if (!response?.ok) throw new Error(String(payload.detail ?? payload.error ?? `Browser Use returned ${response?.status ?? "an error"}.`));
 
     const sessionId = sessionIdOf(payload);
     if (!sessionId) throw new Error("Browser Use created a response without a session ID.");
@@ -199,7 +231,7 @@ export async function POST(request: Request) {
       conversation_id: input.conversationId,
       agent_goal_id: goal.id,
       owner_id: identity.user.id,
-      provider: process.env.BASE44_AGENT_URL ? "base44" : process.env.BROWSER_USE_API_KEY ? "browser_use" : "offline",
+      provider: base44AgentUrl ? "base44" : browserUseKeys.length ? "browser_use" : "offline",
       event: "task_failed",
       details: { error: error instanceof Error ? error.message.slice(0, 500) : "Unknown agent error" },
     });
@@ -227,7 +259,14 @@ export async function GET(request: Request) {
   }
   if (goal.status !== "in_progress") return NextResponse.json({ status: "in_progress" });
 
-  if (!process.env.BROWSER_USE_API_KEY) {
+  let suppliedKeys: unknown = [];
+  try {
+    const header = request.headers.get("x-browser-use-keys");
+    if (header) suppliedKeys = JSON.parse(Buffer.from(header, "base64").toString("utf8"));
+  } catch { return fail("Invalid Browser Use credential pool."); }
+  const userKeys = Array.isArray(suppliedKeys) ? suppliedKeys.filter((key): key is string => typeof key === "string" && key.trim()).slice(0, 10) : [];
+  const browserUseKeys = [...userKeys, process.env.BROWSER_USE_API_KEY ?? ""].filter(Boolean).slice(0, 10);
+  if (!browserUseKeys.length) {
     return NextResponse.json({ status: goal.status, error: "Browser Use Cloud is not configured." });
   }
   const { data: claimed } = await admin.from("agent_goals").update({ status: "planning" }).eq("id", goal.id).eq("status", "in_progress").select("id").maybeSingle();
@@ -235,15 +274,17 @@ export async function GET(request: Request) {
 
   const baseUrl = (process.env.BROWSER_USE_BASE_URL ?? "https://api.browser-use.com/api/v3").replace(/\/$/, "");
   try {
-    const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}`, {
-      headers: { "X-Browser-Use-API-Key": process.env.BROWSER_USE_API_KEY },
-      cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
-    });
-    const payload = await readPayload(response);
-    if (!response.ok) {
+    let response: Response | null = null;
+    let payload: Record<string, unknown> = {};
+    for (const key of browserUseKeys) {
+      response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}`, { headers: { "X-Browser-Use-API-Key": key }, cache: "no-store", signal: AbortSignal.timeout(20_000) });
+      payload = await readPayload(response);
+      if (response.ok) break;
+      if (![401, 403, 408, 429, 500, 502, 503, 504].includes(response.status)) break;
+    }
+    if (!response?.ok) {
       await admin.from("agent_goals").update({ status: "in_progress" }).eq("id", goal.id);
-      return fail(String(payload.detail ?? `Browser Use returned ${response.status}.`), 502);
+      return fail(String(payload.detail ?? `Browser Use returned ${response?.status ?? "an error"}.`), 502);
     }
 
     const rawStatus = String(payload.status ?? "").toLowerCase();
