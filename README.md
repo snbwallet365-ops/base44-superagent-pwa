@@ -29,4 +29,4 @@ Deploy this directory to a Node.js host that supports Next.js App Router (for ex
 
 ## Repository setup
 
-The source is ready to initialize as a Git repository. Set the repository remote and push the `main` branch after choosing a GitHub repository and its visibility.
+The project is committed on `main` in the private repository [snbwallet365-ops/base44-superagent-pwa](https://github.com/snbwallet365-ops/base44-superagent-pwa). Clone it before following the local setup steps above.
